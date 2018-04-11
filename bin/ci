@@ -4,9 +4,12 @@
 set -eu
 
 node-0() {
-    is_enabled "drivers" && export ENGINES="h2,mongo,mysql,bigquery" || export ENGINES="h2"
+    is_enabled "drivers" && export ENGINES="h2,mongo,mysql,bigquery,sparksql" || export ENGINES="h2"
     if is_engine_enabled "mongo"; then
         run_step install-mongodb
+    fi
+    if is_engine_enabled "sparksql"; then
+        run_step install-sparksql
     fi
     MB_MYSQL_TEST_USER=ubuntu run_step lein-test
 }
@@ -122,6 +125,29 @@ install-vertica() {
 install-presto() {
     docker run --detach --publish 8080:8080 metabase/presto-mb-ci
     sleep 10
+}
+
+install-sparksql() {
+    spark_version='2.1.1' # Java 7 support was removed in Spark 2.2 so don't upgrade until we upgrade CI
+    hadoop_version='2.7'
+
+    spark_archive="spark-${spark_version}-bin-hadoop${hadoop_version}.tgz"
+    wget --progress dot -e dotbytes=250K "https://archive.apache.org/dist/spark/spark-${spark_version}/${spark_archive}"
+    tar -xf $spark_archive
+    rm $spark_archive
+
+    spark_dir="$(pwd)/spark-${spark_version}-bin-hadoop${hadoop_version}"
+    java -Duser.timezone=Etc/UTC \
+         -Xmx512m \
+         -cp "${spark_dir}/conf:${spark_dir}/jars/*" \
+         org.apache.spark.deploy.SparkSubmit \
+         --master local[8] \
+         --conf spark.executor.extraJavaOptions=-Duser.timezone=Etc/UTC \
+         --conf spark.cores.max=1 \
+         --class org.apache.spark.sql.hive.thriftserver.HiveThriftServer2 \
+         --name "Thrift JDBC/ODBC Server" \
+         --executor-memory 1g \
+         spark-internal &>/dev/null &
 }
 
 lein-test() {
